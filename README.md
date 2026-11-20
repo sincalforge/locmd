@@ -2,6 +2,15 @@
 
 LocMd is a Rust/Tauri desktop application for local model management and chat. The project metadata, executable name, application identifier and data-directory name use the LocMd identity.
 
+## 品牌标识与寓意
+
+![LOCMD 横向 Logo](frontend/assets/locmd-brand-horizontal.png)
+
+- **Lo**：科技蓝，代表智能与探索。
+- **CMD**：活力橙，突出品牌识别。
+- **图形**：AI 机器人 + 定位针 + 环绕轨道。
+- **风格**：鲜艳、友好、现代、具有科技感。
+
 ## Build
 
 The release executable is `locmd.exe` for Windows x64. A Windows x64 build can be cross-compiled on Linux with the GNU target and packaged with Tauri's NSIS bundler. A native Windows desktop session is required for native launch and installation testing.

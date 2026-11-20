@@ -414,9 +414,9 @@ details.card summary { font-size: 15px; font-weight: 600; color: var(--text); }
 .side-toggle:hover { background: var(--hover); color: var(--text); }
 .side-toggle svg { width: 18px; height: 18px; flex: 0 0 18px; transition: transform .18s ease; }
 #app.collapsed .side { width: 60px; flex-basis: 60px; padding: 16px 9px; }
-#app.collapsed .brand { padding: 2px 0 16px; }
+#app.collapsed .brand { width: 42px; height: 42px; margin: 0 auto 16px; padding: 2px; border: 1px solid var(--blue-line); border-radius: 13px; background: var(--blue-soft); box-shadow: 0 3px 10px rgba(35, 75, 120, .18); }
 #app.collapsed .brand-logo { display: none; }
-#app.collapsed .brand-icon { display: block; width: 26px; height: 26px; flex-basis: 26px; }
+#app.collapsed .brand-icon { display: block; width: 36px; height: 36px; flex-basis: 36px; border-radius: 9px; }
 #app.collapsed .lbl { display: none; }
 #app.collapsed .nav button, #app.collapsed .side-toggle { justify-content: center; padding: 10px 0; }
 #app.collapsed .nav .dot { position: absolute; top: 7px; right: 9px; margin: 0; }

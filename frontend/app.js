@@ -2499,6 +2499,8 @@ setInterval(async () => {
     S.server = await invoke('server_status');
     S.accel = await invoke('accel_status');
   } catch {}
+  const versionLabel = $('#sideVersion');
+  if (versionLabel && S.version) versionLabel.textContent = `v${S.version}`;
   renderSide();
   refreshMembership();
   loadClientConfig();

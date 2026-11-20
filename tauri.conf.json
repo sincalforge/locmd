@@ -32,6 +32,12 @@
   },
   "bundle": {
     "active": true,
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
+      }
+    },
     "icon": [
       "icons/icon.png",
       "icons/icon.ico",

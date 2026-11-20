@@ -60,8 +60,8 @@ function imgForm(kind = mediaKind()) {
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem(kind === 'video' ? 'vidForm' : 'imgForm') || 'null'); } catch {}
     const def = kind === 'video'
-      ? { model: '', prompt: '', negative: '', size: '横屏 480P', steps: 0, secs: 2, seed: '', initImage: '' }
-      : { model: '', prompt: '', negative: '', size: '1:1', steps: 0, count: 1, seed: '', strength: 0.6, refImage: '' };
+      ? { model: '', prompt: '', negative: '', size: '横屏 480P', steps: 0, secs: 2, seed: '', initImage: '', source: 'local', cloudApiId: '', cloudModel: 'wan2.7-t2v', cloudResolution: '720P' }
+      : { model: '', prompt: '', negative: '', size: '1:1', steps: 0, count: 1, seed: '', strength: 0.6, refImage: '', source: 'local', cloudApiId: '', cloudModel: 'wan2.7-image-pro' };
     S.img.forms[kind] = Object.assign(def, saved || {});
     S.img.forms[kind].initImage = ''; // 首帧图片、参考图片不跨重启保存
     S.img.forms[kind].endImage = '';
@@ -168,6 +168,54 @@ function imgEngineNotice() {
 }
 
 // ------------------------------------------------------------------ 画图 / 视频页
+function dashscopeProfiles() {
+  const direct = new Set(['dashscope.aliyuncs.com', 'dashscope-intl.aliyuncs.com', 'dashscope-us.aliyuncs.com', 'cn-hongkong.dashscope.aliyuncs.com']);
+  const regions = new Set(['cn-beijing', 'ap-southeast-1', 'ap-northeast-1', 'eu-central-1', 'us-east-1', 'cn-hongkong']);
+  return (S.apis || []).filter((a) => {
+    if (!a.key) return false;
+    try {
+      const url = new URL(a.base_url);
+      const host = url.hostname.toLowerCase();
+      if (url.protocol !== 'https:' || url.port) return false;
+      if (direct.has(host)) return true;
+      const labels = host.split('.');
+      return labels.length === 5 && /^[a-z0-9-]+$/.test(labels[0]) && regions.has(labels[1]) && labels.slice(2).join('.') === 'maas.aliyuncs.com';
+    } catch { return false; }
+  });
+}
+function cloudProfileFor(f) {
+  const rows = dashscopeProfiles();
+  if (!rows.some((a) => a.id === f.cloudApiId)) f.cloudApiId = rows[0]?.id || '';
+  return rows.find((a) => a.id === f.cloudApiId) || null;
+}
+function cloudMediaPage(head, kind, f) {
+  const video = kind === 'video';
+  const profiles = dashscopeProfiles();
+  const profile = cloudProfileFor(f);
+  const apiSelect = profiles.length
+    ? `<div class="field"><label for="cloudApi">百炼 API 配置</label><select class="input" id="cloudApi" data-change="cloudMediaApi">${profiles.map((a) => `<option value="${esc(a.id)}" ${a.id === profile?.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select><div class="help">使用你在「设置 → API 配置」保存的百炼 Key；Key 不会发送给其他服务。</div></div>`
+    : `<div class="notice"><div><b>还没有百炼 API 配置</b><p>先在「设置 → API 配置」添加阿里通义（百炼）兼容接口及对应地域的 API Key，再回来选择云端生成。其它 OpenAI 兼容服务暂不支持此云端媒体链路。</p></div></div>`;
+  let fields;
+  if (video) {
+    const portrait = String(f.cloudRatio || '').startsWith('9:16') || String(f.size || '').startsWith('竖屏');
+    f.cloudRatio = f.cloudRatio || (portrait ? '9:16' : '16:9');
+    f.cloudResolution = f.cloudResolution || '720P';
+    fields = `<div class="field"><label for="cloudVideoModel">模型</label><select id="cloudVideoModel" class="input" data-change="cloudModel"><option value="wan2.7-t2v" ${f.cloudModel === 'wan2.7-t2v' ? 'selected' : ''}>Wan 2.7 文生视频</option><option value="wan2.7-t2v-2026-06-12" ${f.cloudModel === 'wan2.7-t2v-2026-06-12' ? 'selected' : ''}>Wan 2.7（2026-06-12 快照）</option></select></div>
+      <div class="img-3"><div class="field"><label for="cloudVideoRatio">画面比例</label><select id="cloudVideoRatio" class="input" data-change="cloudVideoRatio"><option value="16:9" ${f.cloudRatio === '16:9' ? 'selected' : ''}>横屏 16:9</option><option value="9:16" ${f.cloudRatio === '9:16' ? 'selected' : ''}>竖屏 9:16</option></select></div><div class="field"><label for="cloudVideoRes">分辨率</label><select id="cloudVideoRes" class="input" data-change="cloudVideoResolution"><option value="720P" ${f.cloudResolution === '720P' ? 'selected' : ''}>720P（默认）</option><option value="1080P" ${f.cloudResolution === '1080P' ? 'selected' : ''}>1080P</option></select></div><div class="field"><label for="cloudSecs">时长（秒）</label><input class="input mono" id="cloudSecs" data-imgf="secs" type="number" min="2" max="15" step="1" value="${Math.max(2, Math.min(15, +f.secs || 2))}"></div></div>
+      <div class="help">云端首版支持文字生成视频（2–15 秒）。首帧/参考图生视频和本地视频模型仍可在「本地」模式使用；视频按时长与分辨率由百炼计费。</div>`;
+  } else {
+    const [dw, dh] = imgDims(f);
+    fields = `<div class="field"><label for="cloudImageModel">模型</label><select id="cloudImageModel" class="input" data-change="cloudModel"><option value="wan2.7-image-pro" ${f.cloudModel === 'wan2.7-image-pro' ? 'selected' : ''}>Wan 2.7 Image Pro（支持最高 4K）</option><option value="wan2.7-image" ${f.cloudModel === 'wan2.7-image' ? 'selected' : ''}>Wan 2.7 Image（最高约 2K）</option></select></div>
+      <div class="field"><label>画面比例与清晰度</label><div class="chips">${IMG_SIZES.map(([k]) => `<button type="button" class="chip ${f.size === k ? 'on' : ''}" data-act="imgSize" data-k="${k}">${k}</button>`).join('')}</div><div class="chips" style="margin-top:8px">${IMG_RES.map(([k]) => `<button type="button" class="chip ${(f.res || '1K') === k ? 'on' : ''}" data-act="imgRes" data-k="${k}">${k}</button>`).join('')}</div><div class="help">当前尺寸 ${dw}×${dh}。高分辨率会增加生成费用；普通 Wan 2.7 Image 最高约 2K。</div></div>
+      <div class="field"><label for="cloudCount">张数</label><select id="cloudCount" class="input" data-change="cloudCount">${[1, 2, 3, 4].map((n) => `<option value="${n}" ${+f.count === n ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+      <div class="field"><label>参考图片（可选）</label>${f.refImage ? `<div class="vid-init"><img src="${f.refImage}" alt=""><button class="btn sm" data-act="clearRefImage">去掉</button></div>` : `<button class="btn" data-act="pickRefImage" style="width:100%">上传图片并基于它生成/编辑</button>`}<div class="help">云端图像模型支持文字生成与单图参考/编辑。</div></div>`;
+  }
+  return `<div class="page img-page">${head}<div class="img-wrap"><section class="card img-form">${apiSelect}${fields}
+      <div class="field"><label for="imgPrompt">${video ? '描述视频里发生的事' : '描述你想要的画面'}</label><textarea class="input" id="imgPrompt" data-imgf="prompt" rows="5" placeholder="${video ? '例如：一只橘猫在草地上追蝴蝶，镜头跟随，阳光明媚，电影感' : '例如：一只橘猫在樱花树下睡觉，阳光透过花瓣，水彩风格'}">${esc(f.prompt)}</textarea></div>
+      <details ${f.negative ? 'open' : ''}><summary class="muted" style="font-size:13px;cursor:pointer">不想出现的内容（反向提示词）</summary><textarea class="input" data-imgf="negative" rows="2" style="margin-top:8px" placeholder="例如：模糊，变形，水印">${esc(f.negative)}</textarea></details>
+      ${profiles.length ? (S.img.busy && S.img.busyKind === kind && video ? `<button class="btn lg" data-act="cancelVideo" style="width:100%">停止等待（云端任务仍可能计费）</button>` : `<button class="btn primary lg" data-act="generateImage" style="width:100%" ${f.prompt.trim() && !S.img.busy ? '' : 'disabled'}>${S.img.busy && S.img.busyKind === kind ? '正在等待百炼生成…' : '提交云端生成'}</button>`) : ''}<div id="imgStatus">${imgStatusHtml(kind)}</div>
+      <div class="help">云端请求会发送提示词${video ? '' : '及你选择上传的参考图片'}至阿里云百炼，按其现行价格计费。生成链接会立即下载并保存在本地作品文件夹。</div></section><section class="img-gallery">${galleryHtml(kind)}</section></div></div>`;
+}
 function pageImage() {
   const kind = mediaKind();
   const video = kind === 'video';
@@ -177,7 +225,8 @@ function pageImage() {
   if (!S.img.catalog || e === undefined) return `<div class="page"><h1>${word}</h1><div class="empty">正在读取…</div></div>`;
   const inst = installedImageModels(kind);
   const modeTabs = video ? '' : `<div class="seg-tabs" role="tablist" aria-label="画图方式"><button role="tab" class="${S.img.mode !== 'canvas' ? 'on' : ''}" data-act="imgMode" data-m="form">表单</button><button role="tab" class="${S.img.mode === 'canvas' ? 'on' : ''}" data-act="imgMode" data-m="canvas">画布</button></div>`;
-  const head = `<div class="page-head"><h1>${video ? '生成视频' : '画图'}</h1>${modeTabs}<div class="row">${S.img.status.running ? `<button class="btn" data-act="stopImage" title="释放模型占用的显存">停止${word}引擎</button>` : ''}<button class="btn" data-act="openImagesDir">打开作品文件夹</button><button class="btn" data-act="go" data-page="models" data-tab="image">下载${word}模型</button></div></div>`;
+  const head = `<div class="page-head"><h1>${video ? '生成视频' : '画图'}</h1>${modeTabs}<div class="row"><label class="sr" for="mediaSource">生成方式</label><select id="mediaSource" class="input" style="width:auto" data-change="mediaSource"><option value="local" ${f.source !== 'cloud' ? 'selected' : ''}>本地模型</option><option value="cloud" ${f.source === 'cloud' ? 'selected' : ''}>云端 API</option></select>${S.img.status.running ? `<button class="btn" data-act="stopImage" title="释放模型占用的显存">停止${word}引擎</button>` : ''}<button class="btn" data-act="openImagesDir">打开作品文件夹</button><button class="btn" data-act="go" data-page="models" data-tab="image">下载${word}模型</button></div></div>`;
+  if (f.source === 'cloud') return cloudMediaPage(head, kind, f);
   if (e === null) return `<div class="page">${head}${imgEngineNotice()}${inst.length ? '' : imgNoModel(kind)}</div>`;
   if (!inst.length) return `<div class="page">${head}${imgNoModel(kind)}</div>`;
 
@@ -284,7 +333,7 @@ function imgNoModel(kind, edit = false) {
 
 function imgStatusHtml(kind = mediaKind()) {
   const g = S.img;
-  if (g.error && (!g.errorKind || g.errorKind === kind)) return `<div class="img-err">${esc(g.error)}<div style="margin-top:6px"><a href="#" data-act="showImgLog">查看完整日志</a></div></div>`;
+  if (g.error && (!g.errorKind || g.errorKind === kind)) return `<div class="img-err">${esc(g.error)}${imgForm(kind).source === 'cloud' ? '' : '<div style="margin-top:6px"><a href="#" data-act="showImgLog">查看完整日志</a></div>'}</div>`;
   if (!g.busy || g.busyKind !== kind) return '';
   const secs = Math.round((Date.now() - g.t0) / 1000);
   const t = secs >= 60 ? `${Math.floor(secs / 60)} 分 ${secs % 60} 秒` : `${secs}s`;
@@ -309,7 +358,7 @@ function galleryHtml(kind) {
   return `<div class="img-grid">${h
     .slice(0, 120)
     .map((r) => {
-      const isVid = r.path.toLowerCase().endsWith('.webm');
+      const isVid = /\.(webm|mp4)$/i.test(r.path);
       const src = S.img.thumbs[r.path];
       const media = isVid
         ? `<video data-path="${esc(r.path)}" ${src ? `src="${src}"` : ''} muted loop autoplay playsinline></video>`
@@ -383,6 +432,32 @@ document.addEventListener('input', (ev) => {
 });
 
 Object.assign(changeHandlers, {
+  mediaSource: (el) => {
+    imgForm().source = el.value === 'cloud' ? 'cloud' : 'local';
+    saveImgForm();
+    render();
+  },
+  cloudMediaApi: (el) => {
+    imgForm().cloudApiId = el.value;
+    saveImgForm();
+  },
+  cloudModel: (el) => {
+    imgForm().cloudModel = el.value;
+    saveImgForm();
+  },
+  cloudVideoRatio: (el) => {
+    imgForm('video').cloudRatio = el.value;
+    saveImgForm('video');
+    render();
+  },
+  cloudVideoResolution: (el) => {
+    imgForm('video').cloudResolution = el.value;
+    saveImgForm('video');
+  },
+  cloudCount: (el) => {
+    imgForm('image').count = +el.value;
+    saveImgForm('image');
+  },
   imgQuant: (el) => {
     S.img.sel[el.dataset.id] = el.value;
     render();
@@ -423,6 +498,66 @@ Object.assign(changeHandlers, {
     saveImgForm();
   },
 });
+
+async function generateCloudFromPage(kind, f) {
+  if (!f.prompt.trim() || S.img.busy) return;
+  const profile = cloudProfileFor(f);
+  if (!profile) {
+    S.img.error = '请先在「设置 → API 配置」添加阿里通义（百炼）兼容 API 配置。';
+    S.img.errorKind = kind;
+    render();
+    return;
+  }
+  S.img.error = '';
+  S.img.errorKind = '';
+  S.img.progress = null;
+  S.img.busyKind = kind;
+  S.img.busy = 'generating';
+  S.img.t0 = Date.now();
+  render();
+  const timer = setInterval(refreshImgStatus, 1000);
+  try {
+    let req;
+    if (kind === 'video') {
+      const ratio = f.cloudRatio || '16:9';
+      const resolution = f.cloudResolution === '1080P' ? '1080P' : '720P';
+      const landscape = ratio !== '9:16';
+      req = {
+        api_id: profile.id, model: f.cloudModel || 'wan2.7-t2v', prompt: f.prompt.trim(),
+        negative_prompt: (f.negative || '').trim(), width: landscape ? (resolution === '1080P' ? 1920 : 1280) : (resolution === '1080P' ? 1080 : 720),
+        height: landscape ? (resolution === '1080P' ? 1080 : 720) : (resolution === '1080P' ? 1920 : 1280),
+        resolution, duration: Math.max(2, Math.min(15, +f.secs || 2)), seed: /^\d+$/.test(String(f.seed).trim()) ? +f.seed : -1,
+      };
+    } else {
+      let [width, height] = imgDims(f);
+      let ref = f.refImage || '';
+      if (ref) {
+        const prepared = await prepRef(ref);
+        width = prepared.w;
+        height = prepared.h;
+        ref = prepared.data;
+      }
+      req = {
+        api_id: profile.id, model: f.cloudModel || 'wan2.7-image-pro', prompt: f.prompt.trim(),
+        negative_prompt: (f.negative || '').trim(), width, height, count: ref ? 1 : (+f.count || 1),
+        seed: /^\d+$/.test(String(f.seed).trim()) ? +f.seed : -1, ref_image: ref,
+      };
+    }
+    const recs = await call(kind === 'video' ? 'generate_cloud_video' : 'generate_cloud_image', { req });
+    S.img.history = [...recs, ...(S.img.history || [])];
+    toast(kind === 'video' ? '云端视频已保存到作品库' : '云端图片已保存到作品库');
+  } catch (e) {
+    S.img.error = String(e).split('\n').slice(0, 14).join('\n');
+    S.img.errorKind = kind;
+  } finally {
+    clearInterval(timer);
+    S.img.busy = '';
+    S.img.progress = null;
+    S.img.status = await invoke('image_status').catch(() => ({}));
+    render();
+    fillThumbs();
+  }
+}
 
 Object.assign(actions, {
   // 画图 / 视频引擎的完整日志（出错时发给开发者用）
@@ -586,6 +721,11 @@ Object.assign(actions, {
   },
   cancelVideo: async () => {
     if (S.img.busy === 'loading') return actions.stopImage();
+    if (imgForm('video').source === 'cloud') {
+      await invoke('cancel_cloud_video_wait').catch(() => {});
+      toast('已停止等待；云端任务可能继续运行并产生费用', 5000);
+      return;
+    }
     await invoke('cancel_video');
     toast('正在取消…');
   },
@@ -676,6 +816,7 @@ Object.assign(actions, {
     const kind = mediaKind();
     const video = kind === 'video';
     const f = imgForm(kind);
+    if (f.source === 'cloud') return generateCloudFromPage(kind, f);
     const [id, quant] = f.model.split('|');
     const m = (S.img.catalog || []).find((x) => x.id === id);
     if (!m || !f.prompt.trim() || S.img.busy) return;
@@ -733,8 +874,8 @@ Object.assign(actions, {
     const r = recByPath(d.path);
     if (!r) return;
     const src = S.img.thumbs[r.path] || (S.img.thumbs[r.path] = await invoke('read_image', { path: r.path }).catch(() => ''));
-    if (r.path.toLowerCase().endsWith('.webm')) return openVideo(src);
-    const list = historyOf(r.kind || 'image').filter((x) => !x.path.toLowerCase().endsWith('.webm')).slice(0, 120);
+    if (/\.(webm|mp4)$/i.test(r.path)) return openVideo(src);
+    const list = historyOf(r.kind || 'image').filter((x) => !/\.(webm|mp4)$/i.test(x.path)).slice(0, 120);
     const items = await Promise.all(list.map(async (x) => ({ name: x.prompt.slice(0, 40), data: S.img.thumbs[x.path] || (S.img.thumbs[x.path] = await invoke('read_image', { path: x.path }).catch(() => '')) })));
     openViewer(items, Math.max(0, list.findIndex((x) => x.path === r.path)));
   },
@@ -966,7 +1107,7 @@ async function sendMediaMessage(kind, text) {
   c.messages.push(user);
   if (c.messages.length === 1) c.title = stripCmd(text).slice(0, 24) || word;
   $('#msgInput').value = '';
-  const media = { kind, mode: edit ? 'edit' : '', status: 'prep', prompt: '', model: '', items: [], note: '', error: '' };
+  const media = { kind, mode: edit ? 'edit' : '', source: imgForm(kind).source || 'local', status: 'prep', prompt: '', model: '', items: [], note: '', error: '' };
   const ai = { role: 'assistant', content: '', media, done: false };
   c.messages.push(ai);
   const mi = c.messages.length - 1;
@@ -981,6 +1122,7 @@ async function sendMediaMessage(kind, text) {
   try {
     await loadImageData(true);
     const f = imgForm(kind);
+    const cloud = f.source === 'cloud';
     const inst = installedImageModels(kind);
     let pick;
     let srcData = '';
@@ -988,6 +1130,15 @@ async function sendMediaMessage(kind, text) {
       srcData = srcAtt ? (await fullSrc(srcAtt)).src : srcPath ? await invoke('read_image', { path: srcPath }).catch(() => '') : '';
       if (!srcData) throw new Error('没找到要修改的图片：请把图片拖进输入框，再说怎么改');
       media.srcThumb = (await makeThumb(srcData, 240)) || '';
+    }
+    const refImg = kind === 'video' ? atts.find((a) => a.kind === 'image') : null;
+    if (cloud) {
+      const profile = cloudProfileFor(f);
+      if (!profile) throw new Error('请先在「设置 → API 配置」添加阿里通义（百炼）兼容 API 配置。');
+      if (kind === 'video' && refImg) throw new Error('云端 Wan 2.7 首版仅接入文生视频；请切换到本地模式使用图生视频。');
+      media.model = `百炼 · ${f.cloudModel || (kind === 'video' ? 'wan2.7-t2v' : 'wan2.7-image-pro')}`;
+    } else {
+      if (edit) {
       // 优先用改图模型；没有就用普通画图模型「按原图重画」
       const edits = inst.filter((x) => x.m.edit);
       // 已经加载着的改图模型 → 画图页选的 → Qwen-Image-Edit（中文指令最准）→ 其他
@@ -1000,37 +1151,39 @@ async function sendMediaMessage(kind, text) {
           notes.push(`还没有改图模型，这次是在原图基础上重画，细节会有变化。${editModelHint}。`);
         }
       }
-    } else {
-      const usable = inst.filter((x) => !x.m.edit_only);
-      pick = usable.find((x) => x.key === f.model) || usable[0];
-    }
-    if (S.img.engine === null || !pick) {
-      media.status = 'nomodel';
-      return;
+      } else {
+        const usable = inst.filter((x) => !x.m.edit_only);
+        pick = usable.find((x) => x.key === f.model) || usable[0];
+      }
+      if (S.img.engine === null || !pick) {
+        media.status = 'nomodel';
+        return;
+      }
     }
     if (S.img.busy) throw new Error(`「${KIND_WORD[S.img.busyKind] || '画图'}」页正在生成，等它完成再试`);
-    // 带了图片要做视频时，优先能「图生视频」的模型
-    const refImg = kind === 'video' ? atts.find((a) => a.kind === 'image') : null;
-    if (refImg && !pick.m.i2v) {
-      const alt = inst.find((x) => x.m.i2v);
-      if (alt) pick = alt;
-      else notes.push('已下载的视频模型不支持参考图片，这次只按文字生成（Wan2.2、LTX-2.3、MiniMax-H3 都支持让图片动起来）。');
+    if (!cloud) {
+      // 带了图片要做视频时，优先能「图生视频」的模型
+      if (refImg && !pick.m.i2v) {
+        const alt = inst.find((x) => x.m.i2v);
+        if (alt) pick = alt;
+        else notes.push('已下载的视频模型不支持参考图片，这次只按文字生成（Wan2.2、LTX-2.3、MiniMax-H3 都支持让图片动起来）。');
+      }
+      // 只能图生视频的模型（Wan2.2 A14B），没给图片时换一个能文生视频的
+      if (kind === 'video' && !refImg && pick.m.edit_only) {
+        const alt = inst.find((x) => !x.m.edit_only);
+        if (!alt) throw new Error(`${pick.m.name} 需要一张图片当第一帧：把图片拖进输入框，再说怎么动`);
+        pick = alt;
+      }
     }
-    // 只能图生视频的模型（Wan2.2 A14B），没给图片时换一个能文生视频的
-    if (kind === 'video' && !refImg && pick.m.edit_only) {
-      const alt = inst.find((x) => !x.m.edit_only);
-      if (!alt) throw new Error(`${pick.m.name} 需要一张图片当第一帧：把图片拖进输入框，再说怎么动`);
-      pick = alt;
-    }
-    const m = pick.m;
-    media.model = `${m.name} · ${qName(pick.q.quant)}`;
-    const english = m.id.startsWith('flux');
+    const m = cloud ? null : pick.m;
+    if (!cloud) media.model = `${m.name} · ${qName(pick.q.quant)}`;
+    const english = !cloud && m.id.startsWith('flux');
     // 1. 改写提示词（用还在运行的对话模型）
     media.status = 'prompt';
     chatJobRefresh();
     // 重画：以原图（如果是这里画的）的提示词为底，加上修改要求
     const prev = media.mode === 'redraw' ? (srcPath && recByPath(srcPath)?.prompt) || '' : lastMediaPrompt(c, kind);
-    media.prompt = await rewriteMediaPrompt(kind, text, prev, english, media.mode === 'edit', media.mode === 'redraw');
+    media.prompt = cloud ? stripCmd(text) : await rewriteMediaPrompt(kind, text, prev, english, media.mode === 'edit', media.mode === 'redraw');
     if (english && !srcReady() && /[\u4e00-\u9fa5]/.test(media.prompt)) notes.push(`${m.name} 对英文${media.mode === 'edit' ? '指令' : '提示词'}效果最好；先启动一个对话模型可以自动翻译。`);
     if (aborted()) throw new DOMException('aborted', 'AbortError');
     let o;
@@ -1039,24 +1192,40 @@ async function sendMediaMessage(kind, text) {
       const r = await prepRef(srcData);
       ref = r.data;
       o = { w: r.w, h: r.h, count: 1 };
+    } else if (cloud && kind === 'video') {
+      const ratio = f.cloudRatio || (/竖屏|竖版|手机|抖音|9[:：比]16/.test(text) ? '9:16' : '16:9');
+      f.cloudRatio = ratio;
+      const resolution = f.cloudResolution === '1080P' ? '1080P' : '720P';
+      const portrait = ratio === '9:16';
+      const secsMatch = text.match(/(\d+)\s*秒/);
+      const secs = Math.max(2, Math.min(15, secsMatch ? +secsMatch[1] : +f.secs || 2));
+      if (secsMatch && (+secsMatch[1] < 2 || +secsMatch[1] > 15)) notes.push('云端 Wan 2.7 视频时长限制为 2–15 秒，已按范围调整。');
+      o = { w: portrait ? (resolution === '1080P' ? 1080 : 720) : (resolution === '1080P' ? 1920 : 1280), h: portrait ? (resolution === '1080P' ? 1920 : 1280) : (resolution === '1080P' ? 1080 : 720), secs, count: 1 };
     } else {
       o = mediaOptions(kind, text, m);
     }
+    if (cloud && kind === 'image' && !edit) {
+      const refAtt = atts.find((a) => a.kind === 'image');
+      const refData = refAtt ? (await fullSrc(refAtt)).src : f.refImage || '';
+      if (refData) ref = (await prepRef(refData)).data;
+    }
     Object.assign(media, { w: o.w, h: o.h, secs: o.secs, count: o.count });
     // 2. 暂停对话模型，加载画图模型
-    const st = S.img.status || {};
-    if (!(st.running && st.ready && st.model === m.id && st.quant === pick.q.quant)) {
-      if (S.server.running) {
-        S.pausedChat = S.server.model_path || S.run.path;
-        notes.push(usingApi() ? `本地对话模型已暂停，把显存让给${kind === 'video' ? '视频模型' : '画图模型'}（现在对话用的是第三方 API，不受影响）。` : `对话模型已暂停，把显存让给${kind === 'video' ? '视频模型' : '画图模型'}；直接发下一条消息会自动重新启动。`);
+    if (!cloud) {
+      const st = S.img.status || {};
+      if (!(st.running && st.ready && st.model === m.id && st.quant === pick.q.quant)) {
+        if (S.server.running) {
+          S.pausedChat = S.server.model_path || S.run.path;
+          notes.push(usingApi() ? `本地对话模型已暂停，把显存让给${kind === 'video' ? '视频模型' : '画图模型'}（现在对话用的是第三方 API，不受影响）。` : `对话模型已暂停，把显存让给${kind === 'video' ? '视频模型' : '画图模型'}；直接发下一条消息会自动重新启动。`);
+        }
+        media.status = 'loading';
+        S.img.busy = 'loading';
+        S.img.busyKind = kind;
+        S.img.t0 = Date.now();
+        chatJobRefresh();
+        S.img.status = await invoke('start_image', { id: m.id, quant: pick.q.quant });
+        S.server = await invoke('server_status');
       }
-      media.status = 'loading';
-      S.img.busy = 'loading';
-      S.img.busyKind = kind;
-      S.img.t0 = Date.now();
-      chatJobRefresh();
-      S.img.status = await invoke('start_image', { id: m.id, quant: pick.q.quant });
-      S.server = await invoke('server_status');
     }
     if (aborted()) throw new DOMException('aborted', 'AbortError');
     // 3. 生成
@@ -1067,7 +1236,22 @@ async function sendMediaMessage(kind, text) {
     S.img.t0 = media.t0 = Date.now();
     render();
     let recs;
-    if (kind === 'video') {
+    if (cloud) {
+      const profile = cloudProfileFor(f);
+      const req = {
+        api_id: profile.id, model: f.cloudModel || (kind === 'video' ? 'wan2.7-t2v' : 'wan2.7-image-pro'),
+        prompt: media.prompt, negative_prompt: edit ? '' : (f.negative || '').trim(), width: o.w, height: o.h,
+        seed: /^\d+$/.test(String(f.seed).trim()) ? +f.seed : -1,
+      };
+      if (kind === 'video') {
+        req.duration = o.secs;
+        req.resolution = f.cloudResolution || '720P';
+      } else {
+        req.count = o.count || 1;
+        req.ref_image = ref || '';
+      }
+      recs = await invoke(kind === 'video' ? 'generate_cloud_video' : 'generate_cloud_image', { req });
+    } else if (kind === 'video') {
       const init = refImg && pick.m.i2v ? await fitImage((await fullSrc(refImg)).src, o.w, o.h).catch(() => null) : null;
       recs = await invoke('generate_video', { req: { prompt: media.prompt, negative_prompt: (f.negative || '').trim(), width: o.w, height: o.h, steps: m.steps, frames: o.frames, seed: -1, init_image: init } });
     } else {
@@ -1109,7 +1293,12 @@ async function stopChatMedia() {
   if (!j) return;
   const msg = S.chats.find((x) => x.id === j.chatId)?.messages[j.mi];
   if (!msg?.media) return;
-  if (msg.media.kind === 'video' && msg.media.status === 'generating') await invoke('cancel_video').catch(() => {});
+  if (msg.media.kind === 'video' && msg.media.status === 'generating') {
+    if (msg.media.source === 'cloud') {
+      await invoke('cancel_cloud_video_wait').catch(() => {});
+      toast('已停止等待；云端任务可能继续运行并产生费用', 5000);
+    } else await invoke('cancel_video').catch(() => {});
+  }
   else if (msg.media.status === 'loading' || msg.media.status === 'generating') {
     await invoke('stop_image').catch(() => {});
     S.img.status = {};
@@ -1168,7 +1357,7 @@ function chatMediaHtml(msg) {
       .map((p) => {
         const r = recByPath(p);
         const src = S.img.thumbs[p];
-        const isVid = p.toLowerCase().endsWith('.webm');
+        const isVid = /\.(webm|mp4)$/i.test(p);
         if (!r) return `<div class="cm-gone">${isVid ? '视频' : '图片'}已删除</div>`;
         const el = isVid ? `<video data-path="${esc(p)}" ${src ? `src="${src}"` : ''} muted loop autoplay playsinline></video>` : `<img data-path="${esc(p)}" alt="" ${src ? `src="${src}"` : ''}>`;
         return `<div class="img-thumb" data-act="viewGen" data-path="${esc(p)}" style="aspect-ratio:${r.width}/${r.height}">${el}${isVid ? '<span class="vid-badge">▶</span>' : ''}</div>`;

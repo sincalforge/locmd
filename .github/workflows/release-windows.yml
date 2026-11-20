@@ -1,0 +1,118 @@
+name: Windows x64 release
+
+on:
+  push:
+    tags:
+      - 'v0.0.*'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Check frontend syntax
+        run: node --check frontend/imagegen.js
+
+      - name: Check Rust formatting
+        run: rustfmt --check src/media.rs
+
+      - name: Run Rust library tests
+        run: cargo test --lib --locked
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version 2.12.6 --locked
+
+      - name: Build Windows x64 NSIS installer
+        run: cargo tauri build --target x86_64-pc-windows-msvc --bundles nsis
+
+      - name: Assemble portable package and checksums
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '0.0.2'
+          $dist = 'dist'
+          $stage = Join-Path $dist "LocMd-$version-windows-x64-portable"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+
+          $binary = 'target/x86_64-pc-windows-msvc/release/locmd.exe'
+          if (-not (Test-Path $binary)) { throw "Windows executable not found: $binary" }
+          Copy-Item $binary (Join-Path $stage 'LocMd.exe')
+
+          $loader = Get-ChildItem 'target/x86_64-pc-windows-msvc/release' -Filter 'WebView2Loader.dll' -File -Recurse | Select-Object -First 1
+          if (-not $loader) { throw 'WebView2Loader.dll was not found in the x64 build output.' }
+          Copy-Item $loader.FullName (Join-Path $stage 'WebView2Loader.dll')
+
+          Set-Content -Path (Join-Path $stage 'portable.txt') -Value 'portable' -Encoding ascii
+          @'
+          LocMd 0.0.2 Windows x64 便携版
+
+          解压后运行 LocMd.exe。便携版会在程序旁创建并使用本地数据目录。
+          首次运行需要安装 Microsoft Edge WebView2 Runtime。
+          '@ | Set-Content -Path (Join-Path $stage '使用说明.txt') -Encoding utf8
+
+          $zip = Join-Path $dist "LocMd-$version-windows-x64-portable.zip"
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Force
+
+          $nsis = Get-ChildItem 'target/x86_64-pc-windows-msvc/release/bundle/nsis' -Filter '*.exe' -File | Select-Object -First 1
+          if (-not $nsis) { throw 'NSIS installer was not found in the Tauri bundle output.' }
+          $installer = Join-Path $dist "LocMd-$version-windows-x64-setup.exe"
+          Copy-Item $nsis.FullName $installer
+
+          $assets = @($installer, $zip)
+          $hashLines = foreach ($asset in $assets) {
+            $hash = (Get-FileHash -Algorithm SHA256 $asset).Hash.ToLowerInvariant()
+            "${hash}  $(Split-Path $asset -Leaf)"
+          }
+          $hashLines | Set-Content -Path (Join-Path $dist 'SHA256SUMS.txt') -Encoding ascii
+          Get-ChildItem $dist | Select-Object Name, Length
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-release-assets
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-release:
+    needs: build-windows
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-x64-release-assets
+          path: release-assets
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: LocMd ${{ github.ref_name }}
+          body: |
+            本版本新增可手动选择的百炼云端图片与视频生成，同时保留本地生成方式。
+
+            Windows x64 安装包与便携包均由此版本源码构建；便携包首次运行需要 Microsoft Edge WebView2 Runtime。
+            云端生成需自行配置百炼 API Key，生成会产生相应费用。详见仓库中的中文 README。
+          files: release-assets/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

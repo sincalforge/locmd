@@ -1,0 +1,41 @@
+{
+  "productName": "LocMd",
+  "version": "0.0.1",
+  "identifier": "local.locmd.desktop",
+  "build": {
+    "frontendDist": "frontend"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "LocMd",
+        "width": 1180,
+        "height": 780
+      }
+    ],
+    "security": {
+      "capabilities": [
+        {
+          "identifier": "main-local",
+          "windows": [
+            "main"
+          ],
+          "permissions": [
+            "core:default",
+            "core:window:allow-set-fullscreen"
+          ]
+        }
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico",
+      "icons/icon.icns"
+    ]
+  }
+}

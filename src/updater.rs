@@ -421,8 +421,8 @@ mod tests {
             assert!(release(&manifest, &json!({"version":"3.2.0","url":bad}), "win").is_err());
         }
         assert!(release(
-            &json!({"version":"3.1.0","win":url}),
-            &json!({"version":"3.1.0","url":url}),
+            &json!({"version":"0.0.1","win":url}),
+            &json!({"version":"0.0.1","url":url}),
             "win"
         )
         .is_err());

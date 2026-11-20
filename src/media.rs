@@ -652,7 +652,7 @@ mod cloud_tests {
 
     #[test]
     fn image_request_rejects_unsupported_resolution_for_base_model() {
-        let req = json!({"prompt":"测试","width":2048,"height":2048});
+        let req = json!({"prompt":"测试","width":2049,"height":2048});
         assert!(cloud_image_request(&req, "wan2.7-image").is_err());
     }
 

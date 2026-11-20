@@ -10,6 +10,22 @@ use std::{
     time::{Duration, Instant},
 };
 
+fn normalize_windows_path(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let value = path.to_string_lossy().into_owned();
+        if value.len() < 240 {
+            if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+                return PathBuf::from(format!(r"\\{rest}"));
+            }
+            if let Some(rest) = value.strip_prefix(r"\\?\") {
+                return PathBuf::from(rest);
+            }
+        }
+    }
+    path
+}
+
 // Resolve symlinks before processing "..", including when only a path prefix exists.
 fn physical(path: &Path) -> Result<PathBuf, String> {
     let mut out = PathBuf::new();
@@ -31,12 +47,12 @@ fn physical(path: &Path) -> Result<PathBuf, String> {
     }
     // Normalize the Windows verbatim prefix for existing and new paths alike.
     if out.exists() {
-        return out.canonicalize().map_err(err);
+        return out.canonicalize().map(normalize_windows_path).map_err(err);
     }
-    Ok(out)
+    Ok(normalize_windows_path(out))
 }
 pub(super) fn resolve(a: &Value) -> Reply {
-    let root = Path::new(arg(a, "ws")?).canonicalize().map_err(err)?;
+    let root = normalize_windows_path(Path::new(arg(a, "ws")?).canonicalize().map_err(err)?);
     let path = physical(&root.join(arg(a, "path")?))?;
     Ok(json!({"path":path,"inside":path.starts_with(&root),"exists":path.exists()}))
 }
@@ -171,7 +187,7 @@ fn shell(root: &Path, a: &Value) -> Reply {
 }
 
 pub(super) fn run(ws: &Path, name: &str, a: &Value) -> Reply {
-    let root = ws.canonicalize().map_err(err)?;
+    let root = normalize_windows_path(ws.canonicalize().map_err(err)?);
     if name == "run_command" {
         return shell(&root, a);
     }

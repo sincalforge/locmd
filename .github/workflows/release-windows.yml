@@ -30,7 +30,7 @@ jobs:
         run: node --check frontend/imagegen.js
 
       - name: Check Rust formatting
-        run: rustfmt --check src/media.rs
+        run: rustfmt --check --edition 2021 src/media.rs src/agent/workspace.rs src/updater.rs
 
       - name: Run Rust library tests
         run: cargo test --lib --locked

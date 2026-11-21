@@ -250,7 +250,7 @@ function pageOverview() {
     ${gpuRow}
     ${spec('处理器', esc(shortCpu(h.cpu.name)), `${h.cpu.physical_cores} 核 ${h.cpu.logical_cores} 线程`)}
     ${spec('内存', `${fmtSize(h.memory.total_bytes)} ${esc(h.memory.kind || '')}`, `可用 ${fmtSize(ramAvail)}`)}
-    ${disk ? spec('模型盘', esc(disk.mount.replace(/\\$/, '')), `剩余 ${fmtSize(disk.available_bytes)}，${disk.is_ssd ? '固态' : '机械硬盘'} <a href="#" data-act="go" data-page="settings">更改</a>`) : ''}
+    ${disk ? spec('模型盘', esc(disk.mount.replace(/\\$/, '')), `剩余 ${fmtSize(disk.available_bytes)}，${disk.is_ssd ? '固态' : '机械硬盘'} <a href="#" data-act="changeModelDir">更改</a>`) : ''}
   </dl>`;
 
   const pickHtml = pick
@@ -1444,6 +1444,18 @@ async function loadOverview(refresh = false) {
   S.engine = S.overview.engine;
   if (S.page === 'overview') render();
 }
+async function applyModelsDir(path) {
+  S.settings = await call('save_settings', { settings: { ...S.settings, models_dir: path } });
+  S.catalog = null;
+  S.local = null;
+  try {
+    await loadOverview(false);
+  } catch (e) {
+    toast(`模型目录已保存，但概览刷新失败：${String(e).split('\n')[0]}`, 5000);
+    return;
+  }
+  toast('模型目录已更改；已下载的模型不会自动搬家', 5000);
+}
 async function loadCatalog() {
   S.catalog = await call('get_catalog');
   if (S.page === 'models') render();
@@ -2051,7 +2063,14 @@ const actions = {
   },
   pickDir: async () => {
     const p = await call('pick_folder');
-    if (p) $('#st-dir').value = p;
+    if (p) {
+      $('#st-dir').value = p;
+      await applyModelsDir(p);
+    }
+  },
+  changeModelDir: async () => {
+    const p = await call('pick_folder');
+    if (p) await applyModelsDir(p);
   },
   openAppDir: () => call('open_path', { path: S.engine ? S.engine.server_path.replace(/[\\/]engines[\\/].*$/, '') : S.settings.models_dir }),
   redetectGpu: async () => {
@@ -2485,6 +2504,11 @@ setInterval(async () => {
 }, 2000);
 
 // ------------------------------------------------------------------ 启动
+function applyLoadedSettings(settings) {
+  S.settings = settings;
+  if (S.page === 'settings') render();
+}
+
 (async function init() {
   if ($('#app').classList.contains('collapsed')) {
     const t = $('#sideToggle');
@@ -2494,7 +2518,7 @@ setInterval(async () => {
   }
   render();
   try {
-    S.settings = await invoke('get_settings');
+    applyLoadedSettings(await invoke('get_settings'));
     try { S.version = await window.__TAURI__.app.getVersion(); } catch {}
     S.server = await invoke('server_status');
     S.accel = await invoke('accel_status');

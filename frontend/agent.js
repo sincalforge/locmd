@@ -544,53 +544,40 @@ async function streamOnce(convo, tools, ai, mi, meter, opt = {}) {
   const res = await llmFetch(body, signal);
   if (!res.ok) {
     const t = await res.text();
+    const errorKind = AgentCallUtils.classifyToolCallError(t);
+    if (tools.length && errorKind === 'invalid_arguments') throw new Error(`工具调用参数 JSON 无效，服务端无法解析，请重试。（${t.slice(0, 300)}）`);
+    if (tools.length && errorKind === 'unsupported') throw new Error(`这个模型不支持工具调用，请在输入框下方关掉「工具」后再试。（${t.slice(0, 200)}）`);
     if (res.apiError) throw new Error(t);
-    if (tools.length && /tool|template|jinja/i.test(t)) throw new Error(`这个模型不支持工具调用，请在输入框下方关掉「工具」后再试。（${t.slice(0, 200)}）`);
     throw new Error(`模型返回错误：HTTP ${res.status} ${t.slice(0, 300)}`);
   }
   const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = '';
   let text = '';
   let finish = '';
   const calls = [];
   const sep = ai.content ? '\n\n' : '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const lines = buf.split('\n');
-    buf = lines.pop();
-    for (const line of lines) {
-      const l = line.trim();
-      if (!l.startsWith('data:')) continue;
-      const payload = l.slice(5).trim();
-      if (payload === '[DONE]') continue;
-      let j;
-      try { j = JSON.parse(payload); } catch { continue; }
-      if (j.timings) meter.timings = j.timings;
-      const ch = j.choices?.[0];
-      if (ch?.finish_reason) finish = ch.finish_reason;
-      const d = ch?.delta || {};
-      if (d.reasoning_content) { ai.reasoning += d.reasoning_content; meter.tick(); }
-      if (d.content) {
-        if (!text && sep) ai.content += sep;
-        text += d.content;
-        ai.content += d.content;
-        meter.tick();
-      }
-      for (const tc of d.tool_calls || []) {
-        const k = tc.index ?? calls.length;
-        calls[k] = calls[k] || { id: '', name: '', args: '' };
-        if (tc.id) calls[k].id = tc.id;
-        if (tc.function?.name) calls[k].name += tc.function.name;
-        if (tc.function?.arguments) calls[k].args += tc.function.arguments;
-        meter.tick();
-      }
-      opt.live?.({ reasoning: !!d.reasoning_content, content: !!d.content, call: calls.filter(Boolean).at(-1) });
-      update(mi);
+  await AgentCallUtils.consumeSseJson(reader, (j) => {
+    if (j.timings) meter.timings = j.timings;
+    const ch = j.choices?.[0];
+    if (ch?.finish_reason) finish = ch.finish_reason;
+    const d = ch?.delta || {};
+    if (d.reasoning_content) { ai.reasoning += d.reasoning_content; meter.tick(); }
+    if (d.content) {
+      if (!text && sep) ai.content += sep;
+      text += d.content;
+      ai.content += d.content;
+      meter.tick();
     }
-  }
+    for (const tc of d.tool_calls || []) {
+      const k = tc.index ?? calls.length;
+      calls[k] = calls[k] || { id: '', name: '', args: '' };
+      if (tc.id) calls[k].id = tc.id;
+      if (tc.function?.name) calls[k].name += tc.function.name;
+      if (tc.function?.arguments) calls[k].args += tc.function.arguments;
+      meter.tick();
+    }
+    opt.live?.({ reasoning: !!d.reasoning_content, content: !!d.content, call: calls.filter(Boolean).at(-1) });
+    update(mi);
+  });
   return { text, calls: calls.filter(Boolean).filter((c) => c.name), finish };
 }
 

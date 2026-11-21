@@ -49,10 +49,20 @@ const AGENT_TOOLS = {
     params: { path: { type: 'string' }, start_line: { type: 'integer', description: '从第几行开始，默认 1' }, max_lines: { type: 'integer', description: '最多读多少行，默认 2000' } },
     required: ['path'],
   },
+  create_file: {
+    desc: '在工作文件夹中新建文件并写入内容；如果文件已存在会报错，不会覆盖。上级文件夹不存在时会自动创建。',
+    params: { path: { type: 'string', description: '相对工作文件夹的路径' }, content: { type: 'string', description: '新文件的全部内容；空字符串可创建空文件' } },
+    required: ['path', 'content'],
+  },
   write_file: {
     desc: '新建或整体覆盖一个文件（上级文件夹不存在会自动创建）。改已有文件的一小部分请用 edit_file。',
     params: { path: { type: 'string', description: '相对工作文件夹的路径' }, content: { type: 'string', description: '文件的全部内容' } },
     required: ['path', 'content'],
+  },
+  open_html: {
+    desc: '在系统默认浏览器中打开工作文件夹里的本地 HTML 页面。path 使用相对工作文件夹的路径，例如 index.html；不要用 web_fetch 打开本地文件。',
+    params: { path: { type: 'string', description: '相对工作文件夹的 .html 或 .htm 文件路径' } },
+    required: ['path'],
   },
   edit_file: {
     desc: '把文件里的一段原文替换成新内容。old_text 必须和文件里完全一致（含缩进），而且只出现一次；不确定时先 read_file。',
@@ -80,17 +90,17 @@ const AGENT_TOOLS = {
     required: ['command'],
   },
   web_search: { desc: '联网搜索，返回标题、网址和摘要。', params: { query: { type: 'string' } }, required: ['query'] },
-  web_fetch: { desc: '打开网页，读取正文（查文档、看报错的解决办法）。', params: { url: { type: 'string' } }, required: ['url'] },
+  web_fetch: { desc: '读取在线网页正文，url 必须是完整的 http:// 或 https:// 地址。打开工作文件夹里的本地 HTML 页面请用 open_html，传相对路径如 index.html。', params: { url: { type: 'string' } }, required: ['url'] },
 };
 // 权限：read = 仅限查看（只能读文件、搜索，不能改、不能执行命令）；
 //       ws = 仅限工作区（默认：只能动工作文件夹里的文件，执行命令、删除先问）；
-//       full = 完全权限（文件夹外也能动，命令、删除都不再问）
+//       full = 完全权限（命令、删除无需逐次确认；文件工具仍限工作文件夹）
 const AG_PERMS = {
   read: { label: '仅限查看', note: '只能查看工作文件夹里的文件，不会修改、删除，也不会执行命令' },
   ws: { label: '仅限工作区', note: '只能读写工作文件夹里的文件；执行命令、删除会先问你' },
-  full: { label: '完全权限', note: '可以读写电脑上任何文件，执行命令、删除都不再询问。只在信任这个任务时使用' },
+  full: { label: '完全权限', note: '命令和删除不再询问；文件工具仍仅限工作文件夹。只在信任这个任务时使用' },
 };
-const READ_TOOLS = ['list_files', 'read_file', 'search_files', 'web_search', 'web_fetch', 'update_plan'];
+const READ_TOOLS = ['list_files', 'read_file', 'search_files', 'web_search', 'web_fetch', 'open_html', 'update_plan'];
 function agPerm() {
   if (!S.ag.perm) {
     try { S.ag.perm = localStorage.getItem('agPerm') || 'ws'; } catch { S.ag.perm = 'ws'; }
@@ -103,8 +113,8 @@ const agentSchemas = () =>
     type: 'function',
     function: { name, description: d.desc, parameters: { type: 'object', properties: d.params, required: d.required || [] } },
   }));
-const PATH_TOOLS = ['list_files', 'read_file', 'write_file', 'edit_file', 'make_dir', 'delete_path', 'search_files'];
-const WRITE_TOOLS = ['write_file', 'edit_file', 'make_dir', 'delete_path'];
+const PATH_TOOLS = ['list_files', 'read_file', 'create_file', 'write_file', 'edit_file', 'make_dir', 'delete_path', 'search_files', 'open_html'];
+const WRITE_TOOLS = ['create_file', 'write_file', 'edit_file', 'make_dir', 'delete_path'];
 
 function agentSystem(t) {
   return [
@@ -113,12 +123,13 @@ function agentSystem(t) {
     '工作方式：',
     '1. 任务有 3 步以上时，先用 update_plan 列出计划；每开始、完成一步都更新计划状态。',
     '2. 先了解再动手：用 list_files、read_file、search_files 看清楚已有的文件，不要凭空猜。',
-    '3. 新建文件用 write_file；改已有文件优先用 edit_file 只改需要的部分，不要整个重写。',
+    '3. 新建文件用 create_file（只新建，不覆盖已有文件）；改已有文件优先用 edit_file 只改需要的部分，需要整体替换时用 write_file。',
+    '3a. 用户要预览本地网页时，用 open_html 打开工作文件夹内的 .html/.htm 文件；web_fetch 只用于读取完整的 HTTP(S) 在线网址。',
     `4. 写完代码尽量用 run_command 运行或测试（${SHELL}，在工作文件夹里执行），看到报错就修复，直到能正常工作。`,
     {
       read: '5. 当前是「仅限查看」权限：只能查看、搜索文件和网页，不能修改文件、不能执行命令。需要改动时，把具体的修改方案写给用户，让用户切换权限或自己操作。',
       ws: '5. 当前是「仅限工作区」权限：只能读写工作文件夹里的文件，碰不到文件夹以外的文件；执行命令、删除会先征得用户同意，被拒绝就换个办法或者说明需要用户自己做什么。',
-      full: '5. 当前是「完全权限」：可以读写电脑上的任何文件、直接执行命令。尽量只在工作文件夹里操作，删除和覆盖重要文件前要格外谨慎。',
+      full: '5. 当前是「完全权限」：命令、删除可直接执行；文件工具仍只能访问工作文件夹内的路径。尽量谨慎操作。',
     }[agPerm()],
     '6. 能自己查到的不要问用户；只有真正需要用户决定的事情才提问，并停下来等回答。',
     '7. 全部完成后用简短的中文总结：做了什么、生成或修改了哪些文件、怎么使用 / 运行。',
@@ -134,7 +145,9 @@ function agentStepLabel(name, a) {
     update_plan: '更新计划',
     list_files: `查看文件夹 ${s(a.path || '.')}`,
     read_file: `读取 ${s(a.path)}`,
+    create_file: `新建文件 ${s(a.path)}`,
     write_file: `写入 ${s(a.path)}`,
+    open_html: `打开本地网页 ${s(a.path)}`,
     edit_file: `修改 ${s(a.path)}`,
     make_dir: `新建文件夹 ${s(a.path)}`,
     delete_path: `删除 ${s(a.path)}`,
@@ -149,6 +162,7 @@ function agentStepLabel(name, a) {
 function callingLabel(name, args) {
   const path = (args.match(/"path"\s*:\s*"((?:[^"\\]|\\.)*)/) || [])[1] || '';
   const kb = args.length >= 1024 ? `${(args.length / 1024).toFixed(1)} KB` : `${args.length} 字`;
+  if (name === 'create_file') return path ? `正在新建 ${path}（已生成 ${kb}）` : `正在准备新建文件（${kb}）`;
   if (name === 'write_file') return path ? `正在写 ${path}（已生成 ${kb}）` : `正在准备写文件（${kb}）`;
   if (name === 'edit_file') return path ? `正在准备修改 ${path}（${kb}）` : '正在准备修改文件';
   if (name === 'run_command') return '正在准备要执行的命令…';
@@ -156,13 +170,12 @@ function callingLabel(name, args) {
   return `准备${agentStepLabel(name, path ? { path } : {})}…`;
 }
 
-// 要不要先问用户：工作文件夹里的读写自动；命令、删除、文件夹外要问
+// 要不要先问用户：文件工具始终限制在工作文件夹；命令和删除在普通权限下先问
 async function agentPermit(t, name, a, resolved) {
   t.allow = t.allow || {};
   const perm = agPerm();
+  if (PATH_TOOLS.includes(name) && !resolved.inside) return 'blocked:Agent 文件工具只能访问你选定的工作文件夹内的路径。';
   if (perm === 'read' && !READ_TOOLS.includes(name)) return 'blocked:当前是「仅限查看」权限，不能修改文件或执行命令。请把修改方案告诉用户。';
-  if (perm === 'read' && PATH_TOOLS.includes(name) && !resolved.inside) return 'blocked:当前是「仅限查看」权限，只能查看工作文件夹里的文件。';
-  if (perm === 'ws' && PATH_TOOLS.includes(name) && !resolved.inside) return 'blocked:当前是「仅限工作区」权限，不能访问工作文件夹以外的文件。需要的话请用户切换到「完全权限」，或者把文件复制进工作文件夹。';
   if (perm === 'full') return true;
   let group = '';
   let title = '';
@@ -177,10 +190,6 @@ async function agentPermit(t, name, a, resolved) {
     group = 'delete';
     title = 'Agent 想删除';
     detail = resolved.path;
-  } else if (PATH_TOOLS.includes(name) && !resolved.inside) {
-    group = WRITE_TOOLS.includes(name) ? 'outside_write' : 'outside_read';
-    title = WRITE_TOOLS.includes(name) ? 'Agent 想修改工作文件夹以外的文件' : 'Agent 想读取工作文件夹以外的文件';
-    detail = resolved.path + (name === 'write_file' ? `\n\n${String(a.content ?? '').slice(0, 1200)}` : '');
   } else return true;
   if (t.allow[group]) return true;
   const r = await askConfirm({
@@ -188,7 +197,7 @@ async function agentPermit(t, name, a, resolved) {
     body: group === 'run_command' ? `在 ${t.ws} 里执行。请确认命令是安全的再允许。` : '',
     detail,
     lang,
-    alwaysLabel: { run_command: '这个任务不再询问执行命令', delete: '这个任务不再询问删除', outside_write: '这个任务不再询问', outside_read: '这个任务不再询问读取' }[group],
+    alwaysLabel: { run_command: '这个任务不再询问执行命令', delete: '这个任务不再询问删除' }[group],
   });
   if (r === 'always') t.allow[group] = true;
   return r !== 'deny';
@@ -212,7 +221,7 @@ async function agentExec(t, name, a) {
   if (WRITE_TOOLS.includes(name)) {
     const p = resolved.path;
     t.changed = (t.changed || []).filter((x) => x.path !== p);
-    t.changed.unshift({ path: p, op: name === 'delete_path' ? '删除' : name === 'make_dir' ? '新建文件夹' : name === 'edit_file' ? '修改' : resolved.exists ? '覆盖' : '新建' });
+    t.changed.unshift({ path: p, op: name === 'delete_path' ? '删除' : name === 'make_dir' ? '新建文件夹' : name === 'create_file' ? '新建' : name === 'edit_file' ? '修改' : resolved.exists ? '覆盖' : '新建' });
     S.ag.tree = ''; // 文件变了，文件树下次重新读
   }
   return out;
@@ -568,7 +577,7 @@ document.addEventListener(
 Object.assign(changeHandlers, {
   agPerm: (el) => {
     const v = el.value;
-    if (v === 'full' && !confirm(tr('切换到「完全权限」？Agent 将可以读写电脑上的任何文件、直接执行命令和删除，不再逐条询问。只在你信任这个任务时使用。'))) {
+    if (v === 'full' && !confirm(tr('切换到「完全权限」？文件工具仍只能访问工作文件夹；Agent 可直接执行命令和删除，不再逐条询问。只在你信任这个任务时使用。'))) {
       el.value = agPerm();
       return;
     }

@@ -31,8 +31,20 @@ fn get(url: Url) -> Result<(String, String), String> {
         .map_err(err)?;
     Ok((mime, String::from_utf8_lossy(&data).into_owned()))
 }
+
+fn webpage_url(raw: &str) -> Result<Url, String> {
+    let url = Url::parse(raw).map_err(|_| {
+        "网页地址必须是完整的 HTTP(S) 地址；打开工作文件夹里的本地 HTML 请使用 open_html 工具"
+            .to_owned()
+    })?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("只支持 HTTP 或 HTTPS 网页；本地 HTML 请使用 open_html 工具".into());
+    }
+    Ok(url)
+}
+
 pub(super) fn fetch(url: &str) -> Reply {
-    let (mime, data) = get(Url::parse(url).map_err(err)?)?;
+    let (mime, data) = get(webpage_url(url)?)?;
     let content = if mime.contains("html") {
         let doc = Html::parse_document(&data);
         let root = doc
@@ -130,4 +142,23 @@ pub(super) fn search(query: &str) -> Reply {
         return Err("搜索服务未返回结果".into());
     }
     Ok(json!(results.join("\n\n")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relative_local_paths_explain_the_html_open_tool() {
+        let error = webpage_url("index.html").unwrap_err();
+        assert!(error.contains("完整的 HTTP(S) 地址"));
+        assert!(error.contains("open_html"));
+    }
+
+    #[test]
+    fn web_fetch_rejects_non_http_schemes_with_actionable_message() {
+        let error = webpage_url("file:///tmp/index.html").unwrap_err();
+        assert!(error.contains("只支持 HTTP 或 HTTPS"));
+        assert!(error.contains("open_html"));
+    }
 }

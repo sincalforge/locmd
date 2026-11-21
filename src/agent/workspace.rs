@@ -2,7 +2,7 @@ use super::{arg, err, files, Reply};
 use serde_json::{json, Value};
 use std::{
     fs,
-    io::{Read, Seek, SeekFrom},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Mutex,
@@ -193,6 +193,9 @@ pub(super) fn run(ws: &Path, name: &str, a: &Value) -> Reply {
     }
     let raw = root.join(a["path"].as_str().unwrap_or("."));
     let path = physical(&raw)?;
+    if !path.starts_with(&root) {
+        return Err("Agent 文件工具只能访问工作文件夹内的路径".into());
+    }
     match name {
         "list_files" | "search_files" => {
             let search = name == "search_files";
@@ -274,6 +277,25 @@ pub(super) fn run(ws: &Path, name: &str, a: &Value) -> Reply {
                 .collect::<Vec<_>>()
                 .join("\n")))
         }
+        "create_file" => {
+            let s = arg(a, "content")?;
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(err)?;
+            }
+            let mut file = match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(file) => file,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    return Err(format!("文件已存在，未覆盖：{}", path.display()));
+                }
+                Err(e) => return Err(err(e)),
+            };
+            file.write_all(s.as_bytes()).map_err(err)?;
+            Ok(json!(format!("已新建 {}", path.display())))
+        }
         "write_file" => {
             let s = arg(a, "content")?;
             if let Some(parent) = path.parent() {
@@ -299,6 +321,11 @@ pub(super) fn run(ws: &Path, name: &str, a: &Value) -> Reply {
             fs::create_dir_all(&path).map_err(err)?;
             Ok(json!(format!("已创建 {}", path.display())))
         }
+        "open_html" => {
+            validate_html_file(&path)?;
+            open::that(&path).map_err(err)?;
+            Ok(json!(format!("已在默认浏览器中打开 {}", path.display())))
+        }
         "delete_path" => {
             if path == root || path.parent().is_none() {
                 return Err("不能删除工作文件夹或文件系统根目录".into());
@@ -314,6 +341,21 @@ pub(super) fn run(ws: &Path, name: &str, a: &Value) -> Reply {
         }
         _ => Err(format!("未知工具 {name}")),
     }
+}
+
+fn validate_html_file(path: &Path) -> Result<(), String> {
+    let metadata = fs::metadata(path).map_err(err)?;
+    if !metadata.is_file() {
+        return Err("只能打开 HTML 文件".into());
+    }
+    if !path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("html") || e.eq_ignore_ascii_case("htm"))
+    {
+        return Err("本地网页只能是 .html 或 .htm 文件".into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -345,6 +387,71 @@ mod tests {
         );
     }
 
+    #[test]
+    fn create_read_and_write_files_inside_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        fs::create_dir(&root).unwrap();
+        run(
+            &root,
+            "create_file",
+            &json!({"path":"nested/notes.txt","content":"first\nsecond"}),
+        )
+        .unwrap();
+        assert_eq!(
+            run(&root, "read_file", &json!({"path":"nested/notes.txt"})).unwrap(),
+            "1\tfirst\n2\tsecond"
+        );
+        assert!(run(
+            &root,
+            "create_file",
+            &json!({"path":"nested/notes.txt","content":"do not overwrite"})
+        )
+        .is_err());
+        run(
+            &root,
+            "write_file",
+            &json!({"path":"nested/notes.txt","content":"updated"}),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("nested/notes.txt")).unwrap(),
+            "updated"
+        );
+    }
+
+    #[test]
+    fn file_tools_reject_paths_outside_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        fs::create_dir(&root).unwrap();
+        let outside = temp.path().join("outside.txt");
+        fs::write(&outside, "keep me").unwrap();
+
+        assert!(run(&root, "read_file", &json!({"path":"../outside.txt"})).is_err());
+        assert!(run(
+            &root,
+            "write_file",
+            &json!({"path":"../outside.txt","content":"changed"})
+        )
+        .is_err());
+        assert_eq!(fs::read_to_string(outside).unwrap(), "keep me");
+    }
+
+    #[test]
+    fn open_html_accepts_only_existing_html_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let html = temp.path().join("index.html");
+        fs::write(&html, "<h1>Hello</h1>").unwrap();
+        assert!(validate_html_file(&html).is_ok());
+        assert!(validate_html_file(&temp.path().join("missing.html")).is_err());
+
+        let text = temp.path().join("notes.txt");
+        fs::write(&text, "notes").unwrap();
+        assert!(validate_html_file(&text).is_err());
+        assert!(validate_html_file(temp.path()).is_err());
+    }
+
     #[cfg(unix)]
     #[test]
     fn new_files_through_external_symlinks_are_outside() {
@@ -357,6 +464,12 @@ mod tests {
                 resolve(&json!({"ws":root,"path":path})).unwrap()["inside"],
                 false
             );
+            assert!(run(
+                &root,
+                "write_file",
+                &json!({"path":path,"content":"must stay inside"})
+            )
+            .is_err());
         }
         assert_eq!(
             resolve(&json!({"ws":root,"path":"new/child"})).unwrap()["inside"],

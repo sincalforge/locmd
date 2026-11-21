@@ -10,6 +10,15 @@
       slots.push(`<code class="inl">${esc(c)}</code>`);
       return `\u0000${slots.length - 1}\u0000`;
     });
+    // Some models wrap plain replies in a malformed duplicate font tag. Strip only the known
+    // languagist wrapper; inline code has already been protected above, and fenced code never
+    // passes through inline(). Other HTML-like text is escaped below, not rendered.
+    let unwrapped;
+    do {
+      unwrapped = s;
+      s = s.replace(/<font\b(?=[^>]*\bclass\s*=\s*(['"])\s*languagist\s*\1)[^>]*>([\s\S]*?)<\/font>(?:\s*<\/font>)*/gi, '$2');
+      s = s.replace(/<font\b(?=[^>]*\bclass\s*=\s*(['"])\s*languagist\s*\1)[^>]*>/gi, '');
+    } while (s !== unwrapped);
     s = esc(s);
     s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
     s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');

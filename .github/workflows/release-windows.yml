@@ -29,10 +29,19 @@ jobs:
       - name: Check frontend syntax
         run: |
           node --check frontend/imagegen.js
+          node --check frontend/agent.js
+          node --check frontend/agent-call-utils.js
           node --check frontend/agentpage.js
+          node --check frontend/markdown.js
+          node --check frontend/app.js
+          node --check tests/agent_call_utils.test.js
+          node --check tests/markdown.test.js
+
+      - name: Run frontend regression tests
+        run: node --test tests/agent_call_utils.test.js tests/markdown.test.js
 
       - name: Check Rust formatting
-        run: rustfmt --check --edition 2021 src/agent.rs src/media.rs src/agent/workspace.rs src/updater.rs
+        run: rustfmt --check --edition 2021 src/agent.rs src/media.rs src/agent/workspace.rs src/agent/web.rs src/updater.rs
 
       - name: Run Rust library tests
         run: cargo test --lib --locked
@@ -53,7 +62,7 @@ jobs:
           $tagVersion = $env:GITHUB_REF_NAME -replace '^v', ''
           if ($version -ne $tagVersion) { throw "Tag version $tagVersion does not match package version $version." }
           $dist = 'dist'
-          $stage = Join-Path $dist "LocMd-$version-windows-x64-portable"
+          $stage = Join-Path $env:RUNNER_TEMP "LocMd-$version-windows-x64-portable"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
@@ -107,18 +116,24 @@ jobs:
           name: windows-x64-release-assets
           path: release-assets
 
-      - name: Publish GitHub Release
+      - name: Create GitHub Release draft
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: LocMd ${{ github.ref_name }}
           body: |
-            本版本修复 Windows 版 Agent 工作文件夹文件工具：支持安全新建、读取与写入文件，并在前端和后端同时限制文件工具仅访问用户选定的工作文件夹（包括完全权限模式）。
+            修复 Agent 工具调用与文件交付流程，并修复畸形字体包装导致的 Markdown 显示问题。
 
-            Windows x64 安装包与便携包均由此版本源码在 GitHub Actions 的 Windows runner 构建。便携包首次运行需要 Microsoft Edge WebView2 Runtime。
-            本地生成方式保持不变；云端生成需自行配置百炼 API Key，使用时可能产生费用。详见仓库中的中文 README。
+            - 兼容 MiniCPM5 原生 XML 工具调用，同时保留标准 JSON `tool_calls`。
+            - 加强工具参数校验、HTML 先写后开顺序与交付文件复核。
+            - 清理 `languagist` 字体包装；代码块中的 HTML 仍按原样转义。
+
+            Windows x64 附件：
+            - `LocMd-0.0.4-windows-x64-setup.exe`
+            - `LocMd-0.0.4-windows-x64-portable.zip`
+            - `SHA256SUMS.txt`
           files: release-assets/*
-          draft: false
+          draft: true
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

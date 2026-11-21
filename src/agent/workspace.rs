@@ -54,7 +54,88 @@ fn physical(path: &Path) -> Result<PathBuf, String> {
 pub(super) fn resolve(a: &Value) -> Reply {
     let root = normalize_windows_path(Path::new(arg(a, "ws")?).canonicalize().map_err(err)?);
     let path = physical(&root.join(arg(a, "path")?))?;
-    Ok(json!({"path":path,"inside":path.starts_with(&root),"exists":path.exists()}))
+    let metadata = fs::metadata(&path).ok();
+    Ok(
+        json!({"path":path,"inside":path.starts_with(&root),"exists":metadata.is_some(),"is_file":metadata.as_ref().is_some_and(|m| m.is_file()),"is_dir":metadata.as_ref().is_some_and(|m| m.is_dir())}),
+    )
+}
+
+fn require_string<'a>(a: &'a Value, key: &str) -> Result<&'a str, String> {
+    match a.get(key) {
+        Some(value) if value.is_string() => value
+            .as_str()
+            .ok_or_else(|| format!("参数 {key} 不是有效字符串")),
+        Some(_) => Err(format!("参数 {key} 必须是字符串")),
+        None => Err(format!("缺少参数 {key}")),
+    }
+}
+
+fn validate_tool_args(name: &str, a: &Value) -> Result<(), String> {
+    if !a.is_object() {
+        return Err("工具参数必须是 JSON 对象".into());
+    }
+    match name {
+        "list_files" => {
+            if a.get("path").is_some() {
+                require_string(a, "path")?;
+            }
+            if let Some(depth) = a.get("depth") {
+                if !depth.is_u64() {
+                    return Err("参数 depth 必须是整数".into());
+                }
+            }
+        }
+        "read_file" => {
+            require_string(a, "path")?;
+            for key in ["start_line", "max_lines"] {
+                if let Some(value) = a.get(key) {
+                    if !value.is_u64() {
+                        return Err(format!("参数 {key} 必须是整数"));
+                    }
+                }
+            }
+        }
+        "create_file" | "write_file" => {
+            require_string(a, "path")?;
+            require_string(a, "content")?;
+        }
+        "edit_file" => {
+            require_string(a, "path")?;
+            require_string(a, "old_text")?;
+            require_string(a, "new_text")?;
+            if let Some(value) = a.get("replace_all") {
+                if !value.is_boolean() {
+                    return Err("参数 replace_all 必须是布尔值".into());
+                }
+            }
+        }
+        "make_dir" | "delete_path" | "open_html" => {
+            require_string(a, "path")?;
+        }
+        "search_files" => {
+            require_string(a, "pattern")?;
+            if let Some(value) = a.get("path") {
+                if !value.is_string() {
+                    return Err("参数 path 必须是字符串".into());
+                }
+            }
+            if let Some(value) = a.get("file_types") {
+                if !value.is_string() {
+                    return Err("参数 file_types 必须是字符串".into());
+                }
+            }
+        }
+        "run_command" => {
+            require_string(a, "command")?;
+            if let Some(value) = a.get("timeout") {
+                if !value.is_u64() {
+                    return Err("参数 timeout 必须是整数".into());
+                }
+            }
+        }
+        _ => return Err(format!("未知工具 {name}")),
+    }
+    Ok(())
 }
 
 fn walk(
@@ -188,6 +269,7 @@ fn shell(root: &Path, a: &Value) -> Reply {
 
 pub(super) fn run(ws: &Path, name: &str, a: &Value) -> Reply {
     let root = normalize_windows_path(ws.canonicalize().map_err(err)?);
+    validate_tool_args(name, a)?;
     if name == "run_command" {
         return shell(&root, a);
     }
@@ -279,6 +361,12 @@ pub(super) fn run(ws: &Path, name: &str, a: &Value) -> Reply {
         }
         "create_file" => {
             let s = arg(a, "content")?;
+            if path.is_dir() {
+                return Err(format!(
+                    "目标路径已是文件夹，不是网页文件：{}。请用 create_file 指定文件路径并写入内容；不要用 make_dir 创建 .html/.htm。",
+                    path.display()
+                ));
+            }
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).map_err(err)?;
             }
@@ -298,6 +386,12 @@ pub(super) fn run(ws: &Path, name: &str, a: &Value) -> Reply {
         }
         "write_file" => {
             let s = arg(a, "content")?;
+            if path.is_dir() {
+                return Err(format!(
+                    "目标路径是文件夹，不是文件：{}。请改用具体文件名；不要用 make_dir 创建 .html/.htm。",
+                    path.display()
+                ));
+            }
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).map_err(err)?;
             }
@@ -318,6 +412,16 @@ pub(super) fn run(ws: &Path, name: &str, a: &Value) -> Reply {
             Ok(json!(format!("已修改 {}", path.display())))
         }
         "make_dir" => {
+            if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("html") || e.eq_ignore_ascii_case("htm"))
+            {
+                return Err(format!(
+                    "不能把网页文件路径创建为文件夹：{}。请用 create_file 写入 HTML 内容。",
+                    path.display()
+                ));
+            }
             fs::create_dir_all(&path).map_err(err)?;
             Ok(json!(format!("已创建 {}", path.display())))
         }
@@ -344,9 +448,21 @@ pub(super) fn run(ws: &Path, name: &str, a: &Value) -> Reply {
 }
 
 fn validate_html_file(path: &Path) -> Result<(), String> {
-    let metadata = fs::metadata(path).map_err(err)?;
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!(
+                "HTML 文件不存在：{}。请先用 create_file 写入页面内容，再用 open_html 预览。",
+                path.display()
+            ));
+        }
+        Err(e) => return Err(err(e)),
+    };
     if !metadata.is_file() {
-        return Err("只能打开 HTML 文件".into());
+        return Err(format!(
+            "目标路径是文件夹，不是 HTML 文件：{}。请先用 create_file 写入页面内容，再用 open_html 预览。",
+            path.display()
+        ));
     }
     if !path
         .extension()
@@ -450,6 +566,78 @@ mod tests {
         fs::write(&text, "notes").unwrap();
         assert!(validate_html_file(&text).is_err());
         assert!(validate_html_file(temp.path()).is_err());
+    }
+
+    #[test]
+    fn html_paths_cannot_be_created_as_directories_and_create_file_explains_conflicts() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let created = run(root, "make_dir", &json!({"path":"index.html"})).unwrap_err();
+        assert!(created.contains("create_file"));
+        assert!(!root.join("index.html").exists());
+
+        fs::create_dir(root.join("existing.html")).unwrap();
+        let error = run(
+            root,
+            "create_file",
+            &json!({"path":"existing.html","content":"<h1>Timer</h1>"}),
+        )
+        .unwrap_err();
+        assert!(error.contains("文件夹"));
+        assert!(error.contains("create_file"));
+    }
+
+    #[test]
+    fn open_html_reports_missing_files_and_directory_targets_actionably() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing = run(
+            temp.path(),
+            "open_html",
+            &json!({"path":"missing/index.html"}),
+        )
+        .unwrap_err();
+        assert!(missing.contains("文件不存在"));
+        assert!(missing.contains("create_file"));
+
+        let directory = temp.path().join("index.html");
+        fs::create_dir(&directory).unwrap();
+        let error = run(temp.path(), "open_html", &json!({"path":"index.html"})).unwrap_err();
+        assert!(error.contains("文件夹"));
+        assert!(error.contains("create_file"));
+    }
+
+    #[test]
+    fn tool_arguments_require_declared_fields_and_types() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(run(temp.path(), "create_file", &json!({"path":"x.txt"})).is_err());
+        assert!(run(
+            temp.path(),
+            "create_file",
+            &json!({"path":"x.txt","content":3})
+        )
+        .is_err());
+        assert!(run(
+            temp.path(),
+            "read_file",
+            &json!({"path":"x.txt","max_lines":"2"})
+        )
+        .is_err());
+        assert!(run(temp.path(), "make_dir", &json!({"path":3})).is_err());
+        assert!(run(temp.path(), "not_a_tool", &json!({})).is_err());
+    }
+
+    #[test]
+    fn resolve_reports_file_and_directory_types() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("index.html"), "<h1>ok</h1>").unwrap();
+        fs::create_dir(temp.path().join("assets")).unwrap();
+        let file = resolve(&json!({"ws":temp.path(),"path":"index.html"})).unwrap();
+        assert_eq!(file["exists"], true);
+        assert_eq!(file["is_file"], true);
+        assert_eq!(file["is_dir"], false);
+        let dir = resolve(&json!({"ws":temp.path(),"path":"assets"})).unwrap();
+        assert_eq!(dir["is_file"], false);
+        assert_eq!(dir["is_dir"], true);
     }
 
     #[cfg(unix)]

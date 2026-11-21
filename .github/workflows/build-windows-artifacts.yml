@@ -26,7 +26,16 @@ jobs:
       - name: Check frontend syntax
         run: |
           node --check frontend/imagegen.js
+          node --check frontend/agent.js
+          node --check frontend/agent-call-utils.js
           node --check frontend/agentpage.js
+          node --check frontend/markdown.js
+          node --check frontend/app.js
+          node --check tests/agent_call_utils.test.js
+          node --check tests/markdown.test.js
+
+      - name: Run frontend regression tests
+        run: node --test tests/agent_call_utils.test.js tests/markdown.test.js
 
       - name: Check Rust formatting
         run: rustfmt --check --edition 2021 src/agent.rs src/media.rs src/agent/workspace.rs src/agent/web.rs src/updater.rs

@@ -554,7 +554,14 @@ async function streamOnce(convo, tools, ai, mi, meter, opt = {}) {
   let text = '';
   let finish = '';
   const calls = [];
+  const contentStart = ai.content.length;
   const sep = ai.content ? '\n\n' : '';
+  // Default off. For a local diagnostic run, set localStorage key
+  // `locmd.captureAgentStream` to `1`; the latest deltas stay in memory only.
+  let captureChunks = null;
+  try { if (localStorage.getItem('locmd.captureAgentStream') === '1') captureChunks = []; } catch {}
+  let captureSize = 0;
+  let captureTruncated = false;
   await AgentCallUtils.consumeSseJson(reader, (j) => {
     if (j.timings) meter.timings = j.timings;
     const ch = j.choices?.[0];
@@ -562,9 +569,12 @@ async function streamOnce(convo, tools, ai, mi, meter, opt = {}) {
     const d = ch?.delta || {};
     if (d.reasoning_content) { ai.reasoning += d.reasoning_content; meter.tick(); }
     if (d.content) {
-      if (!text && sep) ai.content += sep;
       text += d.content;
-      ai.content += d.content;
+      const preview = AgentCallUtils.extractMiniCpmXmlToolCalls(text, tools).text;
+      const open = preview.toLowerCase().lastIndexOf('<function');
+      const close = preview.toLowerCase().lastIndexOf('</function');
+      const visible = open > close ? preview.slice(0, open) : preview;
+      ai.content = ai.content.slice(0, contentStart) + (visible ? sep + visible : '');
       meter.tick();
     }
     for (const tc of d.tool_calls || []) {
@@ -575,10 +585,29 @@ async function streamOnce(convo, tools, ai, mi, meter, opt = {}) {
       if (tc.function?.arguments) calls[k].args += tc.function.arguments;
       meter.tick();
     }
+    if (captureChunks && (d.content || d.tool_calls?.length)) {
+      const entry = { content: d.content || '', tool_calls: d.tool_calls || [] };
+      const size = JSON.stringify(entry).length;
+      if (captureSize + size <= 524288) { captureChunks.push(entry); captureSize += size; }
+      else captureTruncated = true;
+    }
     opt.live?.({ reasoning: !!d.reasoning_content, content: !!d.content, call: calls.filter(Boolean).at(-1) });
     update(mi);
   });
-  return { text, calls: calls.filter(Boolean).filter((c) => c.name), finish };
+  const xml = AgentCallUtils.extractMiniCpmXmlToolCalls(text, tools);
+  if (captureChunks) {
+    window.__locmdLastAgentRawStream = {
+      capturedAt: new Date().toISOString(),
+      model: S.run?.model || '',
+      chunks: captureChunks,
+      truncated: captureTruncated,
+    };
+  }
+  text = xml.text;
+  ai.content = ai.content.slice(0, contentStart) + (text ? sep + text : '');
+  update(mi);
+  const structuredCalls = calls.filter(Boolean).filter((c) => c.name);
+  return { text, calls: AgentCallUtils.mergeToolCalls(structuredCalls, xml.calls), finish };
 }
 
 async function streamReply(c) {

@@ -1017,7 +1017,7 @@ function pageSettings() {
     <section class="card stack" style="gap:18px">
       <h2 style="font-size:17px">模型存放</h2>
       <div class="field"><label for="st-dir">模型目录</label><div class="row"><input class="input" id="st-dir" style="flex:1" value="${esc(s.models_dir)}"><button class="btn" data-act="pickDir">选择…</button></div><div class="help">放在剩余空间大的固态硬盘上，加载更快。已下载的模型不会自动搬家。</div></div>
-      <div class="field"><label for="st-imgdir">作品保存位置（画图 / 视频）</label><div class="row"><input class="input" id="st-imgdir" style="flex:1" value="${esc(s.images_dir || '')}" placeholder="${esc(S.imagesDirPath ? '默认：' + S.imagesDirPath : '默认：图片/LocMd')}"><button class="btn" data-act="pickImgDir">选择…</button></div><div class="help">留空用默认位置。生成后提示「保存图片失败：找不到指定的文件」时，换成一个普通文件夹（例如 D:\\LocMd作品）再保存设置。</div></div>
+      <div class="field"><label for="st-imgdir">作品保存位置（画图 / 视频）</label><div class="row"><input class="input" id="st-imgdir" style="flex:1" value="${esc(s.images_dir || '')}" placeholder="${esc(S.imagesDirPath ? '默认：' + S.imagesDirPath : '默认：图片/LocMd')}"><button class="btn" data-act="pickImgDir">选择…</button></div><div class="help">选择文件夹后立即保存；也可手动输入后点击“保存设置”。留空用默认位置。生成后提示「保存图片失败：找不到指定的文件」时，换成一个普通文件夹（例如 D:\\LocMd作品）。</div></div>
     </section>
     <section class="card form">
       <h2 style="font-size:17px">界面</h2>
@@ -2059,7 +2059,18 @@ const actions = {
   },
   pickImgDir: async () => {
     const p = await call('pick_folder');
-    if (p) $('#st-imgdir').value = p;
+    if (!p) return;
+    const previous = S.settings;
+    const settings = { ...previous, images_dir: p };
+    try {
+      S.settings = await call('save_settings', { settings });
+      const input = $('#st-imgdir');
+      if (input) input.value = S.settings?.images_dir || p;
+      toast('作品保存位置已保存');
+    } catch {
+      const input = $('#st-imgdir');
+      if (input) input.value = previous?.images_dir || '';
+    }
   },
   pickDir: async () => {
     const p = await call('pick_folder');

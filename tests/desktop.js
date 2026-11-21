@@ -74,6 +74,57 @@
       S.page = previousModelDirState.page;
       render();
     }
+    const previousImageDirState = { call, settings: S.settings, page: S.page };
+    const selectedImageDir = 'D:\\LocMdRegressionImages';
+    let imageDirPickerCalls = 0;
+    let savedImageDir = '';
+    call = async (cmd, args) => {
+      if (cmd === 'pick_folder') {
+        imageDirPickerCalls++;
+        return selectedImageDir;
+      }
+      if (cmd === 'save_settings') {
+        savedImageDir = args.settings.images_dir;
+        S.settings = { ...args.settings };
+        return S.settings;
+      }
+      throw Error(`unexpected image-directory test command: ${cmd}`);
+    };
+    try {
+      S.page = 'settings';
+      S.settings = { ...S.settings, images_dir: 'C:\\LocMdOldImages' };
+      render();
+      const imageDirButton = document.querySelector('#main button[data-act="pickImgDir"]');
+      assert(imageDirButton, 'settings image-directory picker button');
+      imageDirButton.click();
+      for (let i = 0; i < 50 && savedImageDir !== selectedImageDir; i++) await new Promise(r => setTimeout(r, 20));
+      assert(imageDirPickerCalls === 1, 'image directory change did not open the folder picker');
+      assert(savedImageDir === selectedImageDir && S.settings.images_dir === selectedImageDir, 'image directory picker did not persist the selected path');
+      assert(document.getElementById('st-imgdir')?.value === selectedImageDir, 'image directory input did not refresh to selected path');
+      result.steps.push('settings image-directory picker persists selection immediately');
+    } finally {
+      call = previousImageDirState.call;
+      S.settings = previousImageDirState.settings;
+      S.page = previousImageDirState.page;
+      render();
+    }
+    const fakeHtmlTask = { messages: [{ role: 'user', content: '做一个番茄钟网页，打开 index.html 就能用' }], ws: 'fixture-workspace', allow: {} };
+    const confirmedHtmlTask = { ...fakeHtmlTask, messages: [...fakeHtmlTask.messages, { role: 'user', content: '可以' }] };
+    assert(agentTaskNeedsHtmlArtifact(fakeHtmlTask) && agentTaskNeedsHtmlArtifact(confirmedHtmlTask), 'Agent did not preserve HTML artifact requirements');
+    let htmlDirectoryRejected = false;
+    try {
+      await agentExec(fakeHtmlTask, 'make_dir', { path: 'index.html' });
+    } catch (e) {
+      htmlDirectoryRejected = /不能用 make_dir 创建文件夹/.test(String(e));
+    }
+    assert(htmlDirectoryRejected, 'Agent allowed make_dir to consume index.html during an HTML creation task');
+    result.steps.push('Agent rejects make_dir for HTML artifact paths');
+    assert(/缺少参数 content/.test(agentToolArgumentError('create_file', {path: 'index.html'})), 'Agent accepted missing create_file content');
+    assert(/content.*字符串/.test(agentToolArgumentError('create_file', {path: 'index.html', content: 3})), 'Agent accepted non-string file content');
+    assert(/path.*字符串/.test(agentToolArgumentError('open_html', {path: 3})), 'Agent accepted non-string open_html path');
+    assert(/未知工具/.test(agentToolArgumentError('not_a_tool', {})), 'Agent accepted an unknown tool');
+    assert(agentToolArgumentError('create_file', {path: 'index.html', content: '<h1>ok</h1>'}) === '', 'Agent rejected valid create_file arguments');
+    result.steps.push('Agent rejects unknown tools, missing fields and wrong field types');
     const readySettings = S.settings;
     S.settings = null;
     actions.go({page:'settings'}, null, {preventDefault() {}});
